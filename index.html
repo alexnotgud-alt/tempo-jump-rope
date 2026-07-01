@@ -335,9 +335,27 @@ let baselineY = null;
 let smoothY = null;
 let torsoScale = null;
 let state = 'down';
+let peakDiff = 0;   // largest hip rise seen during the current 'up' phase
+let dpr = 1;
 
-const IDLE_TIMEOUT_MS = 3000;
-const MIN_JUMP_INTERVAL_MS = 180;
+const IDLE_TIMEOUT_MS = 5000;      // end the session only after a genuine pause
+const MIN_JUMP_INTERVAL_MS = 180;  // guard against double-counting a single hop
+const RISE_FRAC = 0.040;           // hips must rise > 4% of torso length to arm a jump…
+const FALL_FRAC = 0.020;           // …then fall back below 2% to complete it
+const VIS_MIN = 0.4;               // ignore landmarks the model isn't confident about
+
+// BlazePose 33-point topology — body + a light face, used for the skeleton overlay.
+const POSE_CONNECTIONS = [
+  [11,12],[11,23],[12,24],[23,24],                 // torso box
+  [11,13],[13,15],[12,14],[14,16],                 // arms
+  [15,17],[15,19],[15,21],[16,18],[16,20],[16,22], // hands
+  [23,25],[25,27],[27,29],[29,31],[27,31],         // left leg
+  [24,26],[26,28],[28,30],[30,32],[28,32],         // right leg
+  [0,2],[2,7],[0,5],[5,8],[9,10],                  // face
+];
+
+// A landmark's confidence, defaulting to visible when the field is absent.
+function vis(p){ return (p && typeof p.visibility === 'number') ? p.visibility : 1; }
 
 async function initPose(){
   const { FilesetResolver, PoseLandmarker } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/+esm");
@@ -363,6 +381,8 @@ async function initPose(){
 $('btn-start-tracking').addEventListener('click', startTracking);
 $('btn-stop-tracking').addEventListener('click', () => endSession());
 $('btn-cancel-tracking').addEventListener('click', () => endSession());
+window.addEventListener('resize', () => { if(sessionActive) sizeCanvas(); });
+window.addEventListener('orientationchange', () => { if(sessionActive) setTimeout(sizeCanvas, 300); });
 
 async function startTracking(){
   showScreen('tracking');
@@ -387,8 +407,7 @@ async function startTracking(){
   }
   video.srcObject = stream;
   await video.play();
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  sizeCanvas();
   $('tracking-status').textContent = 'Step back — start jumping';
   sessionActive = true;
   lastJumpTime = performance.now();
@@ -398,7 +417,7 @@ async function startTracking(){
 
 function resetSessionState(){
   jumpCount = 0; calories = 0; jumpTimestamps = [];
-  baselineY = null; smoothY = null; torsoScale = null; state = 'down';
+  baselineY = null; smoothY = null; torsoScale = null; state = 'down'; peakDiff = 0;
   sessionStarted = false; startTime = 0;
   updateHud();
 }
@@ -414,9 +433,13 @@ function loop(){
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if(lm){
-    processPose(lm, now);
+    const tracked = processPose(lm, now);
     drawOverlay(lm);
-    $('tracking-status').textContent = sessionStarted ? 'Tracking' : 'Detected — start jumping';
+    if(!tracked){
+      $('tracking-status').textContent = 'Move into frame';
+    } else {
+      $('tracking-status').textContent = sessionStarted ? 'Tracking' : 'Detected — start jumping';
+    }
   } else {
     $('tracking-status').textContent = 'Move into frame';
   }
@@ -438,29 +461,46 @@ function loop(){
   rafId = requestAnimationFrame(loop);
 }
 
+// Returns true when the core body (shoulders + hips) is confidently tracked.
+// Works face-on or side-on: it only relies on the hip-centre rising and
+// falling, normalised by torso length so distance from the camera doesn't
+// matter and the same thresholds hold for everyone.
 function processPose(lm, now){
   const ls = lm[11], rs = lm[12], lh = lm[23], rh = lm[24];
-  if(!ls || !rs || !lh || !rh) return;
+  if(!ls || !rs || !lh || !rh) return false;
+  if(Math.min(vis(ls), vis(rs), vis(lh), vis(rh)) < VIS_MIN) return false;
 
   const hipY = (lh.y + rh.y) / 2;
   const shoulderY = (ls.y + rs.y) / 2;
   const torso = Math.abs(hipY - shoulderY) || 0.2;
   torsoScale = torsoScale === null ? torso : torsoScale * 0.9 + torso * 0.1;
 
-  smoothY = smoothY === null ? hipY : smoothY * 0.6 + hipY * 0.4;
-  baselineY = baselineY === null ? smoothY : baselineY * 0.97 + smoothY * 0.03;
+  // Smooth the hip height, then anchor a baseline to the *standing* pose:
+  // settle downward fast, drift upward slowly. This stops continuous jumping
+  // from pulling the baseline up into the signal (the old "one jump then
+  // stop" bug) while still adapting if the person repositions.
+  smoothY = smoothY === null ? hipY : smoothY * 0.4 + hipY * 0.6;
+  if(baselineY === null) baselineY = smoothY;
+  else if(smoothY > baselineY) baselineY += (smoothY - baselineY) * 0.15;
+  else baselineY += (smoothY - baselineY) * 0.01;
 
-  const threshold = torsoScale * 0.12;
-  const diff = baselineY - smoothY; // positive when hips rise above baseline
+  const rise = torsoScale * RISE_FRAC;
+  const fall = torsoScale * FALL_FRAC;
+  const diff = baselineY - smoothY; // > 0 while airborne (hips above standing height)
 
-  if(state === 'down' && diff > threshold){
-    state = 'up';
-  } else if(state === 'up' && diff < threshold * 0.4){
-    state = 'down';
-    if(now - lastJumpTime > MIN_JUMP_INTERVAL_MS){
-      registerJump(now);
+  if(state === 'down'){
+    if(diff > rise){ state = 'up'; peakDiff = diff; }
+  } else { // 'up' — wait for the descent, tracking how high the hop actually went
+    if(diff > peakDiff) peakDiff = diff;
+    if(diff < fall){
+      state = 'down';
+      if(peakDiff >= rise && now - lastJumpTime > MIN_JUMP_INTERVAL_MS){
+        registerJump(now);
+      }
+      peakDiff = 0;
     }
   }
+  return true;
 }
 
 function registerJump(now){
@@ -492,19 +532,55 @@ function metForJpm(jpm){
   return 12.3;
 }
 
+// Size the overlay to the video's on-screen box at device-pixel resolution
+// so the skeleton stays crisp and correctly scaled on any display.
+function sizeCanvas(){
+  dpr = window.devicePixelRatio || 1;
+  const w = video.clientWidth || video.videoWidth || 640;
+  const h = video.clientHeight || video.videoHeight || 480;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+}
+
+// Map a normalised landmark (0..1) to canvas pixels, replicating the video's
+// object-fit:cover crop and mirroring horizontally to match the selfie feed —
+// without this the skeleton drifts off the body.
+function mapPoint(nx, ny){
+  const cw = canvas.width, ch = canvas.height;
+  const vw = video.videoWidth || cw, vh = video.videoHeight || ch;
+  const scale = Math.max(cw / vw, ch / vh);
+  const dw = vw * scale, dh = vh * scale;
+  const ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+  return [cw - (ox + nx * dw), oy + ny * dh]; // x mirrored
+}
+
+// Draw the full 33-point skeleton: bones then joints, tinted lime while
+// airborne and coral while grounded so the jump state is obvious.
 function drawOverlay(lm){
-  const lh = lm[23], rh = lm[24];
-  if(!lh || !rh) return;
-  const hipX = ((lh.x + rh.x) / 2) * canvas.width;
-  const hipY = ((lh.y + rh.y) / 2) * canvas.height;
-  ctx.save();
-  ctx.translate(canvas.width, 0);
-  ctx.scale(-1, 1); // mirror to match the selfie video
-  ctx.fillStyle = state === 'up' ? '#c6ff3d' : '#ff4b3e';
-  ctx.beginPath();
-  ctx.arc(hipX, hipY, 9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  const active = state === 'up';
+  const lineColor = active ? '#c6ff3d' : 'rgba(242,239,233,0.9)';
+  const dotColor  = active ? '#c6ff3d' : '#ff4b3e';
+  const lw = Math.max(2, canvas.width * 0.006);
+  const r  = Math.max(3, canvas.width * 0.009);
+
+  ctx.lineWidth = lw;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = lineColor;
+  for(const [a, b] of POSE_CONNECTIONS){
+    const p = lm[a], q = lm[b];
+    if(!p || !q || vis(p) < VIS_MIN || vis(q) < VIS_MIN) continue;
+    const [x1, y1] = mapPoint(p.x, p.y);
+    const [x2, y2] = mapPoint(q.x, q.y);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+
+  ctx.fillStyle = dotColor;
+  for(const p of lm){
+    if(!p || vis(p) < VIS_MIN) continue;
+    const [x, y] = mapPoint(p.x, p.y);
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
 }
 
 function updateHud(){
