@@ -234,7 +234,10 @@
 </div>
 
 <script type="module">
-import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/[email protected]/+esm";
+// MediaPipe is imported lazily inside initPose() so a slow, blocked, or
+// offline CDN can never stop the rest of the app (onboarding, home) from
+// running. A static top-level import would take the whole script down with
+// it if the CDN failed, silently breaking the "Save & continue" button.
 
 const $ = (id) => document.getElementById(id);
 const screens = {
@@ -337,6 +340,7 @@ const IDLE_TIMEOUT_MS = 3000;
 const MIN_JUMP_INTERVAL_MS = 180;
 
 async function initPose(){
+  const { FilesetResolver, PoseLandmarker } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/[email protected]/+esm");
   const vision = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/[email protected]/wasm"
   );
