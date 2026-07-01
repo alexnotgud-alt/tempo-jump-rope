@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>TEMPO — Jump Rope Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#14171a;
+    --surface:#1e2227;
+    --surface-2:#262b31;
+    --text:#f2efe9;
+    --muted:#8a8f98;
+    --accent:#ff4b3e;   /* coral tape red — stop / alerts */
+    --go:#c6ff3d;        /* lime — active / counting */
+    --border: rgba(242,239,233,0.08);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;height:100%;overflow-x:hidden;}
+  body{
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .display{font-family:'Bebas Neue',sans-serif;letter-spacing:0.5px;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  .muted{color:var(--muted);}
+
+  #app{max-width:480px;margin:0 auto;min-height:100vh;position:relative;}
+
+  .screen{display:none;flex-direction:column;min-height:100vh;padding:24px 20px;}
+  .screen.active{display:flex;}
+
+  /* ---------- Brand header ---------- */
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:28px;}
+  .brand-mark{
+    width:34px;height:34px;border-radius:50%;
+    border:3px solid var(--go);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .brand-mark::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--go);}
+  .brand-name{font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:2px;}
+  .brand-sub{font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-top:-4px;}
+
+  /* ---------- Cards / inputs ---------- */
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px;margin-bottom:16px;}
+  label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px;}
+  .field{margin-bottom:18px;}
+  input[type="number"]{
+    width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;
+    color:var(--text);font-family:'JetBrains Mono',monospace;font-size:20px;padding:12px 14px;
+  }
+  input[type="number"]:focus{outline:2px solid var(--go);outline-offset:1px;}
+
+  button{font-family:'Inter',sans-serif;font-weight:600;border:none;border-radius:12px;cursor:pointer;}
+  .btn-primary{
+    background:var(--go);color:#14171a;padding:16px;font-size:16px;width:100%;
+  }
+  .btn-primary:active{transform:scale(0.98);}
+  .btn-ghost{
+    background:transparent;color:var(--text);border:1px solid var(--border);padding:12px;width:100%;font-size:14px;
+  }
+  .btn-stop{
+    background:var(--accent);color:#fff;padding:16px;font-size:16px;width:100%;
+  }
+
+  h1.title{font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:1px;margin:0 0 4px;}
+  p.lead{color:var(--muted);font-size:14px;margin:0 0 24px;line-height:1.5;}
+
+  /* ---------- Home ---------- */
+  .stat-row{display:flex;gap:10px;margin-bottom:20px;}
+  .stat-box{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px;text-align:center;}
+  .stat-box .val{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;}
+  .stat-box .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:2px;}
+
+  .start-ring{
+    width:180px;height:180px;border-radius:50%;
+    border:4px solid var(--go);
+    display:flex;align-items:center;justify-content:center;
+    margin:12px auto 28px;position:relative;cursor:pointer;background:radial-gradient(circle at 50% 40%, rgba(198,255,61,0.08), transparent 70%);
+  }
+  .start-ring span{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:2px;}
+  .start-ring:active{transform:scale(0.97);}
+
+  .section-label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:8px 0 10px;}
+  .history-item{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:12px 0;border-bottom:1px solid var(--border);font-size:13px;
+  }
+  .history-item:last-child{border-bottom:none;}
+  .hi-date{color:var(--muted);font-size:12px;}
+  .hi-stats{display:flex;gap:12px;font-family:'JetBrains Mono',monospace;font-size:12px;}
+
+  /* ---------- Tracking screen ---------- */
+  #screen-tracking{padding:0;position:relative;background:#000;}
+  #video{
+    width:100%;height:100vh;object-fit:cover;transform:scaleX(-1);display:block;
+  }
+  #overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+  .tracking-top{
+    position:absolute;top:0;left:0;right:0;padding:calc(env(safe-area-inset-top) + 16px) 20px 16px;
+    display:flex;justify-content:space-between;align-items:center;
+    background:linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+  }
+  .status-pill{
+    background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.15);
+    padding:6px 12px;border-radius:20px;font-size:12px;color:var(--text);
+  }
+  .btn-x{
+    width:34px;height:34px;border-radius:50%;background:rgba(0,0,0,0.5);
+    color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.15);
+  }
+  .hud{
+    position:absolute;bottom:0;left:0;right:0;padding:20px 20px calc(env(safe-area-inset-bottom) + 20px);
+    background:linear-gradient(to top, rgba(0,0,0,0.85), transparent);
+    display:flex;flex-direction:column;align-items:center;gap:16px;
+  }
+  .jump-ring{
+    width:150px;height:150px;border-radius:50%;
+    border:5px solid var(--surface-2);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    transition:border-color 0.15s, transform 0.1s;
+    background:rgba(20,23,26,0.6);
+  }
+  .jump-ring.pulse{border-color:var(--go);transform:scale(1.06);}
+  #hud-jumps{font-family:'Bebas Neue',sans-serif;font-size:52px;line-height:1;}
+  .jump-ring .lbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-top:2px;}
+  .hud-stats{display:flex;gap:28px;}
+  .hud-stat{text-align:center;}
+  .hud-stat .val{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;}
+  .hud-stat .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+
+  /* ---------- Summary ---------- */
+  .summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:24px 0;}
+  .summary-cell{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;text-align:center;}
+  .summary-cell .val{font-family:'Bebas Neue',sans-serif;font-size:34px;}
+  .summary-cell .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:2px;}
+
+  .spacer{flex:1;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ONBOARDING -->
+  <section id="screen-onboarding" class="screen active">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div><div class="brand-name">TEMPO</div><div class="brand-sub">Jump Rope Tracker</div></div>
+    </div>
+    <h1 class="title">Set up your profile</h1>
+    <p class="lead">Used to estimate calories burnt from your session's intensity and duration.</p>
+    <form id="onboarding-form">
+      <div class="card">
+        <div class="field">
+          <label for="input-weight">Weight (kg)</label>
+          <input type="number" id="input-weight" inputmode="decimal" step="0.1" min="20" max="300" placeholder="70" required>
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label for="input-height">Height (cm)</label>
+          <input type="number" id="input-height" inputmode="decimal" step="0.5" min="100" max="230" placeholder="178" required>
+        </div>
+      </div>
+      <button type="submit" class="btn-primary">Save & continue</button>
+    </form>
+  </section>
+
+  <!-- HOME -->
+  <section id="screen-home" class="screen">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div><div class="brand-name">TEMPO</div><div class="brand-sub">Jump Rope Tracker</div></div>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat-box"><div class="val" id="home-weight">–</div><div class="lbl">Weight</div></div>
+      <div class="stat-box"><div class="val" id="home-height">–</div><div class="lbl">Height</div></div>
+      <div class="stat-box"><div class="val" id="home-bmi">–</div><div class="lbl">BMI</div></div>
+    </div>
+
+    <div class="start-ring" id="btn-start-tracking">
+      <span>START</span>
+    </div>
+
+    <div class="section-label">Session history</div>
+    <div class="card" id="history-list"></div>
+
+    <div class="spacer"></div>
+    <button class="btn-ghost" id="btn-edit-profile">Edit profile</button>
+  </section>
+
+  <!-- TRACKING -->
+  <section id="screen-tracking" class="screen">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+    <div class="tracking-top">
+      <div class="status-pill" id="tracking-status">Loading…</div>
+      <div class="btn-x" id="btn-cancel-tracking">✕</div>
+    </div>
+    <div class="hud">
+      <div class="jump-ring" id="jump-ring">
+        <div id="hud-jumps">0</div>
+        <div class="lbl">jumps</div>
+      </div>
+      <div class="hud-stats">
+        <div class="hud-stat"><div class="val mono" id="hud-timer">0:00</div><div class="lbl">Time</div></div>
+        <div class="hud-stat"><div class="val mono" id="hud-jpm">0</div><div class="lbl">Jumps/min</div></div>
+        <div class="hud-stat"><div class="val mono" id="hud-cal">0</div><div class="lbl">Kcal</div></div>
+      </div>
+      <button class="btn-stop" id="btn-stop-tracking">End session</button>
+    </div>
+  </section>
+
+  <!-- SUMMARY -->
+  <section id="screen-summary" class="screen">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div><div class="brand-name">TEMPO</div><div class="brand-sub">Session complete</div></div>
+    </div>
+    <h1 class="title">Nice work 🔥</h1>
+    <p class="lead">Here's how your session went.</p>
+    <div class="summary-grid">
+      <div class="summary-cell"><div class="val" id="summary-jumps">0</div><div class="lbl">Jumps</div></div>
+      <div class="summary-cell"><div class="val" id="summary-time">0:00</div><div class="lbl">Duration</div></div>
+      <div class="summary-cell"><div class="val" id="summary-cal">0</div><div class="lbl">Kcal burnt</div></div>
+      <div class="summary-cell"><div class="val" id="summary-jpm">0</div><div class="lbl">Avg jumps/min</div></div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn-primary" id="btn-summary-done">Done</button>
+  </section>
+
+</div>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/[email protected]/+esm";
+
+const $ = (id) => document.getElementById(id);
+const screens = {
+  onboarding: $('screen-onboarding'),
+  home: $('screen-home'),
+  tracking: $('screen-tracking'),
+  summary: $('screen-summary'),
+};
+function showScreen(name){
+  Object.values(screens).forEach(s => s.classList.remove('active'));
+  screens[name].classList.add('active');
+}
+
+/* ---------------- Profile & history storage ---------------- */
+function loadProfile(){ try { return JSON.parse(localStorage.getItem('tempo_profile')); } catch { return null; } }
+function saveProfile(p){ localStorage.setItem('tempo_profile', JSON.stringify(p)); }
+function loadSessions(){ try { return JSON.parse(localStorage.getItem('tempo_sessions')) || []; } catch { return []; } }
+function saveSessions(list){ localStorage.setItem('tempo_sessions', JSON.stringify(list)); }
+
+let profile = loadProfile();
+
+function bmi(p){ const m = p.height / 100; return p.weight / (m * m); }
+
+function formatTime(sec){
+  sec = Math.max(0, Math.floor(sec));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return `${m}:${s.toString().padStart(2,'0')}`;
+}
+
+function populateHome(){
+  $('home-weight').textContent = profile.weight + ' kg';
+  $('home-height').textContent = profile.height + ' cm';
+  $('home-bmi').textContent = bmi(profile).toFixed(1);
+  renderHistory();
+}
+
+function renderHistory(){
+  const list = loadSessions();
+  const el = $('history-list');
+  if(!list.length){
+    el.innerHTML = '<p class="muted" style="margin:4px 0;font-size:13px;">No sessions yet — tap Start to jump in.</p>';
+    return;
+  }
+  el.innerHTML = '';
+  list.slice().reverse().slice(0, 10).forEach(s => {
+    const d = new Date(s.date);
+    const row = document.createElement('div');
+    row.className = 'history-item';
+    row.innerHTML = `
+      <div class="hi-date">${d.toLocaleDateString()}<br>${d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+      <div class="hi-stats">
+        <span>${s.jumps} j</span>
+        <span>${formatTime(s.duration)}</span>
+        <span>${Math.round(s.calories)} kcal</span>
+      </div>`;
+    el.appendChild(row);
+  });
+}
+
+/* ---------------- Onboarding ---------------- */
+$('onboarding-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const weight = parseFloat($('input-weight').value);
+  const height = parseFloat($('input-height').value);
+  if(!weight || !height) return;
+  profile = { weight, height };
+  saveProfile(profile);
+  populateHome();
+  showScreen('home');
+});
+
+$('btn-edit-profile').addEventListener('click', () => {
+  $('input-weight').value = profile.weight;
+  $('input-height').value = profile.height;
+  showScreen('onboarding');
+});
+
+if(profile){ populateHome(); showScreen('home'); }
+
+/* ---------------- Pose tracking ---------------- */
+let poseLandmarker = null;
+let video, canvas, ctx;
+let stream = null;
+let rafId = null;
+let sessionActive = false;
+let sessionStarted = false;
+let startTime = 0;
+let lastJumpTime = 0;
+let lastTickTime = 0;
+let jumpTimestamps = [];
+let jumpCount = 0;
+let calories = 0;
+
+let baselineY = null;
+let smoothY = null;
+let torsoScale = null;
+let state = 'down';
+
+const IDLE_TIMEOUT_MS = 3000;
+const MIN_JUMP_INTERVAL_MS = 180;
+
+async function initPose(){
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/[email protected]/wasm"
+  );
+  const modelPath = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  try {
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: modelPath, delegate: "GPU" },
+      runningMode: "VIDEO",
+      numPoses: 1,
+    });
+  } catch (err) {
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: modelPath, delegate: "CPU" },
+      runningMode: "VIDEO",
+      numPoses: 1,
+    });
+  }
+}
+
+$('btn-start-tracking').addEventListener('click', startTracking);
+$('btn-stop-tracking').addEventListener('click', () => endSession());
+$('btn-cancel-tracking').addEventListener('click', () => endSession());
+
+async function startTracking(){
+  showScreen('tracking');
+  resetSessionState();
+  video = $('video'); canvas = $('overlay'); ctx = canvas.getContext('2d');
+  $('tracking-status').textContent = 'Loading model…';
+  try {
+    if(!poseLandmarker){ await initPose(); }
+  } catch (err) {
+    $('tracking-status').textContent = 'Could not load the tracker.';
+    return;
+  }
+  $('tracking-status').textContent = 'Starting camera…';
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+  } catch (err) {
+    $('tracking-status').textContent = 'Camera access denied.';
+    return;
+  }
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  $('tracking-status').textContent = 'Step back — start jumping';
+  sessionActive = true;
+  lastJumpTime = performance.now();
+  lastTickTime = performance.now();
+  loop();
+}
+
+function resetSessionState(){
+  jumpCount = 0; calories = 0; jumpTimestamps = [];
+  baselineY = null; smoothY = null; torsoScale = null; state = 'down';
+  sessionStarted = false; startTime = 0;
+  updateHud();
+}
+
+function loop(){
+  if(!sessionActive) return;
+  const now = performance.now();
+  let lm = null;
+  try {
+    const result = poseLandmarker.detectForVideo(video, now);
+    if(result.landmarks && result.landmarks.length){ lm = result.landmarks[0]; }
+  } catch (err) { /* skip a bad frame */ }
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if(lm){
+    processPose(lm, now);
+    drawOverlay(lm);
+    $('tracking-status').textContent = sessionStarted ? 'Tracking' : 'Detected — start jumping';
+  } else {
+    $('tracking-status').textContent = 'Move into frame';
+  }
+
+  if(sessionStarted){
+    const dtSec = (now - lastTickTime) / 1000;
+    const jpm = currentJpm();
+    const met = metForJpm(jpm);
+    calories += met * 3.5 * profile.weight / 200 * (dtSec / 60);
+    if(now - lastJumpTime > IDLE_TIMEOUT_MS){
+      lastTickTime = now;
+      updateHud();
+      endSession();
+      return;
+    }
+  }
+  lastTickTime = now;
+  updateHud();
+  rafId = requestAnimationFrame(loop);
+}
+
+function processPose(lm, now){
+  const ls = lm[11], rs = lm[12], lh = lm[23], rh = lm[24];
+  if(!ls || !rs || !lh || !rh) return;
+
+  const hipY = (lh.y + rh.y) / 2;
+  const shoulderY = (ls.y + rs.y) / 2;
+  const torso = Math.abs(hipY - shoulderY) || 0.2;
+  torsoScale = torsoScale === null ? torso : torsoScale * 0.9 + torso * 0.1;
+
+  smoothY = smoothY === null ? hipY : smoothY * 0.6 + hipY * 0.4;
+  baselineY = baselineY === null ? smoothY : baselineY * 0.97 + smoothY * 0.03;
+
+  const threshold = torsoScale * 0.12;
+  const diff = baselineY - smoothY; // positive when hips rise above baseline
+
+  if(state === 'down' && diff > threshold){
+    state = 'up';
+  } else if(state === 'up' && diff < threshold * 0.4){
+    state = 'down';
+    if(now - lastJumpTime > MIN_JUMP_INTERVAL_MS){
+      registerJump(now);
+    }
+  }
+}
+
+function registerJump(now){
+  jumpCount++;
+  jumpTimestamps.push(now);
+  if(jumpTimestamps.length > 8) jumpTimestamps.shift();
+  lastJumpTime = now;
+  if(!sessionStarted){ sessionStarted = true; startTime = now; }
+  pulseRing();
+}
+
+function pulseRing(){
+  const ring = $('jump-ring');
+  ring.classList.add('pulse');
+  setTimeout(() => ring.classList.remove('pulse'), 140);
+}
+
+function currentJpm(){
+  if(jumpTimestamps.length < 2) return 0;
+  const intervals = [];
+  for(let i = 1; i < jumpTimestamps.length; i++) intervals.push(jumpTimestamps[i] - jumpTimestamps[i-1]);
+  const avg = intervals.reduce((a,b) => a+b, 0) / intervals.length;
+  return avg > 0 ? 60000 / avg : 0;
+}
+
+function metForJpm(jpm){
+  if(jpm < 90) return 8.8;
+  if(jpm < 130) return 11.8;
+  return 12.3;
+}
+
+function drawOverlay(lm){
+  const lh = lm[23], rh = lm[24];
+  if(!lh || !rh) return;
+  const hipX = ((lh.x + rh.x) / 2) * canvas.width;
+  const hipY = ((lh.y + rh.y) / 2) * canvas.height;
+  ctx.save();
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1); // mirror to match the selfie video
+  ctx.fillStyle = state === 'up' ? '#c6ff3d' : '#ff4b3e';
+  ctx.beginPath();
+  ctx.arc(hipX, hipY, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function updateHud(){
+  $('hud-jumps').textContent = jumpCount;
+  const elapsed = sessionStarted ? (performance.now() - startTime) / 1000 : 0;
+  $('hud-timer').textContent = formatTime(elapsed);
+  $('hud-jpm').textContent = Math.round(currentJpm());
+  $('hud-cal').textContent = Math.round(calories);
+}
+
+function endSession(){
+  sessionActive = false;
+  if(rafId) cancelAnimationFrame(rafId);
+  if(stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+
+  if(sessionStarted && jumpCount > 0){
+    const duration = (lastJumpTime - startTime) / 1000;
+    const avgJpm = duration > 0 ? jumpCount / (duration / 60) : 0;
+    const sessions = loadSessions();
+    sessions.push({ date: Date.now(), jumps: jumpCount, duration, calories, avgJpm });
+    saveSessions(sessions);
+    showSummary({ jumps: jumpCount, duration, calories, avgJpm });
+  } else {
+    populateHome();
+    showScreen('home');
+  }
+}
+
+function showSummary(s){
+  $('summary-jumps').textContent = s.jumps;
+  $('summary-time').textContent = formatTime(s.duration);
+  $('summary-cal').textContent = Math.round(s.calories);
+  $('summary-jpm').textContent = Math.round(s.avgJpm);
+  showScreen('summary');
+}
+
+$('btn-summary-done').addEventListener('click', () => {
+  populateHome();
+  showScreen('home');
+});
+</script>
+</body>
+</html>
