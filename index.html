@@ -92,6 +92,8 @@
   .history-item:last-child{border-bottom:none;}
   .hi-date{color:var(--muted);font-size:12px;}
   .hi-stats{display:flex;gap:12px;font-family:'JetBrains Mono',monospace;font-size:12px;}
+  .hi-del{background:transparent;border:none;color:var(--muted);font-size:15px;line-height:1;padding:6px 4px;margin-left:8px;cursor:pointer;}
+  .hi-del:hover,.hi-del:active{color:var(--accent);}
 
   /* ---------- Tracking screen ---------- */
   #screen-tracking{padding:0;position:relative;background:#000;}
@@ -228,7 +230,8 @@
       <div class="summary-cell"><div class="val" id="summary-jpm">0</div><div class="lbl">Avg jumps/min</div></div>
     </div>
     <div class="spacer"></div>
-    <button class="btn-primary" id="btn-summary-done">Done</button>
+    <button class="btn-ghost" id="btn-summary-resume" style="margin-bottom:10px;">Resume session</button>
+    <button class="btn-primary" id="btn-summary-done">Done &amp; save</button>
   </section>
 
 </div>
@@ -292,7 +295,8 @@ function renderHistory(){
         <span>${s.jumps} j</span>
         <span>${formatTime(s.duration)}</span>
         <span>${Math.round(s.calories)} kcal</span>
-      </div>`;
+      </div>
+      <button class="hi-del" data-del="${s.date}" aria-label="Delete session">✕</button>`;
     el.appendChild(row);
   });
 }
@@ -336,10 +340,12 @@ let smoothY = null;
 let torsoScale = null;
 let state = 'down';
 let peakDiff = 0;   // largest hip rise seen during the current 'up' phase
+let upStart = 0;    // when the current 'up' phase began — used to reject slow drifts
+let pausedAt = 0;   // when the session was paused, to keep the timer accurate on resume
 let dpr = 1;
 
-const IDLE_TIMEOUT_MS = 5000;      // end the session only after a genuine pause
 const MIN_JUMP_INTERVAL_MS = 180;  // guard against double-counting a single hop
+const MAX_AIRBORNE_MS = 700;       // a rise slower than this is postural drift, not a hop
 const RISE_FRAC = 0.040;           // hips must rise > 4% of torso length to arm a jump…
 const FALL_FRAC = 0.020;           // …then fall back below 2% to complete it
 const VIS_MIN = 0.4;               // ignore landmarks the model isn't confident about
@@ -383,10 +389,31 @@ $('btn-stop-tracking').addEventListener('click', () => endSession());
 $('btn-cancel-tracking').addEventListener('click', () => endSession());
 window.addEventListener('resize', () => { if(sessionActive) sizeCanvas(); });
 window.addEventListener('orientationchange', () => { if(sessionActive) setTimeout(sizeCanvas, 300); });
+$('history-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-del]');
+  if(btn) deleteSession(Number(btn.getAttribute('data-del')));
+});
 
+// Fresh session from the Home screen.
 async function startTracking(){
   showScreen('tracking');
   resetSessionState();
+  lastJumpTime = performance.now();
+  await beginCamera();
+}
+
+// Continue the same session from the summary — keeps the count, and shifts
+// startTime forward by the paused duration so the timer excludes the gap.
+async function resumeSession(){
+  showScreen('tracking');
+  if(sessionStarted && pausedAt){ startTime += performance.now() - pausedAt; }
+  pausedAt = 0;
+  lastJumpTime = performance.now();
+  await beginCamera();
+}
+
+// Shared camera + loop startup, used by both start and resume.
+async function beginCamera(){
   video = $('video'); canvas = $('overlay'); ctx = canvas.getContext('2d');
   $('tracking-status').textContent = 'Loading model…';
   try {
@@ -408,9 +435,8 @@ async function startTracking(){
   video.srcObject = stream;
   await video.play();
   sizeCanvas();
-  $('tracking-status').textContent = 'Step back — start jumping';
+  $('tracking-status').textContent = sessionStarted ? 'Tracking' : 'Step back — start jumping';
   sessionActive = true;
-  lastJumpTime = performance.now();
   lastTickTime = performance.now();
   loop();
 }
@@ -444,17 +470,12 @@ function loop(){
     $('tracking-status').textContent = 'Move into frame';
   }
 
-  if(sessionStarted){
+  if(sessionStarted && now - lastJumpTime < 2000){
+    // Only burn calories while actively jumping (within 2s of the last hop),
+    // so standing idle on the tracking screen doesn't inflate the total.
     const dtSec = (now - lastTickTime) / 1000;
-    const jpm = currentJpm();
-    const met = metForJpm(jpm);
+    const met = metForJpm(currentJpm());
     calories += met * 3.5 * profile.weight / 200 * (dtSec / 60);
-    if(now - lastJumpTime > IDLE_TIMEOUT_MS){
-      lastTickTime = now;
-      updateHud();
-      endSession();
-      return;
-    }
   }
   lastTickTime = now;
   updateHud();
@@ -489,10 +510,15 @@ function processPose(lm, now){
   const diff = baselineY - smoothY; // > 0 while airborne (hips above standing height)
 
   if(state === 'down'){
-    if(diff > rise){ state = 'up'; peakDiff = diff; }
+    if(diff > rise){ state = 'up'; peakDiff = diff; upStart = now; }
   } else { // 'up' — wait for the descent, tracking how high the hop actually went
     if(diff > peakDiff) peakDiff = diff;
-    if(diff < fall){
+    if(now - upStart > MAX_AIRBORNE_MS){
+      // Risen too long to be a real hop — postural drift (leaning, walking
+      // toward the camera, standing up from a crouch). Abandon without counting.
+      state = 'down';
+      peakDiff = 0;
+    } else if(diff < fall){
       state = 'down';
       if(peakDiff >= rise && now - lastJumpTime > MIN_JUMP_INTERVAL_MS){
         registerJump(now);
@@ -591,36 +617,58 @@ function updateHud(){
   $('hud-cal').textContent = Math.round(calories);
 }
 
+// End (pause) tracking: stop the camera and loop but KEEP the count. Nothing
+// is saved yet — the summary screen offers Resume (continue) or Done & save.
 function endSession(){
   sessionActive = false;
   if(rafId) cancelAnimationFrame(rafId);
   if(stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
-
+  pausedAt = performance.now();
   if(sessionStarted && jumpCount > 0){
-    const duration = (lastJumpTime - startTime) / 1000;
-    const avgJpm = duration > 0 ? jumpCount / (duration / 60) : 0;
-    const sessions = loadSessions();
-    sessions.push({ date: Date.now(), jumps: jumpCount, duration, calories, avgJpm });
-    saveSessions(sessions);
-    showSummary({ jumps: jumpCount, duration, calories, avgJpm });
+    showSummary();
   } else {
+    resetSessionState();
     populateHome();
     showScreen('home');
   }
 }
 
-function showSummary(s){
-  $('summary-jumps').textContent = s.jumps;
-  $('summary-time').textContent = formatTime(s.duration);
-  $('summary-cal').textContent = Math.round(s.calories);
-  $('summary-jpm').textContent = Math.round(s.avgJpm);
+function sessionDuration(){
+  return sessionStarted ? Math.max(0, (lastJumpTime - startTime) / 1000) : 0;
+}
+
+function showSummary(){
+  const duration = sessionDuration();
+  const avgJpm = duration > 0 ? jumpCount / (duration / 60) : 0;
+  $('summary-jumps').textContent = jumpCount;
+  $('summary-time').textContent = formatTime(duration);
+  $('summary-cal').textContent = Math.round(calories);
+  $('summary-jpm').textContent = Math.round(avgJpm);
   showScreen('summary');
 }
 
-$('btn-summary-done').addEventListener('click', () => {
+// Done & save: persist the finished session to history, then reset to Home.
+function finishSession(){
+  if(sessionStarted && jumpCount > 0){
+    const duration = sessionDuration();
+    const avgJpm = duration > 0 ? jumpCount / (duration / 60) : 0;
+    const sessions = loadSessions();
+    sessions.push({ date: Date.now(), jumps: jumpCount, duration, calories, avgJpm });
+    saveSessions(sessions);
+  }
+  resetSessionState();
+  pausedAt = 0;
   populateHome();
   showScreen('home');
-});
+}
+
+function deleteSession(date){
+  saveSessions(loadSessions().filter(s => s.date !== date));
+  renderHistory();
+}
+
+$('btn-summary-done').addEventListener('click', finishSession);
+$('btn-summary-resume').addEventListener('click', resumeSession);
 </script>
 </body>
 </html>
